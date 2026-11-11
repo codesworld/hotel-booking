@@ -1,0 +1,224 @@
+# CI pipeline (PROJECT_PLAN.md, Phase 6)
+#
+#   build ──> smoke ──┬──> api-playwright (regression) ──┐
+#                     └──> api-java       (regression) ──┴──> e2e (Chromium + Firefox)
+#
+# - Every test job starts its own stack with `docker compose up --build --wait`
+#   (waits for the health checks) using the committed .env.test (dummy values only).
+# - Regression runs only if smoke passed; E2E runs only if both API suites passed.
+# - Reports are uploaded as artifacts even when tests fail (if: always()).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same branch cancels the run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build and static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: booking-api — install and type-check
+        working-directory: services/booking-api
+        run: npm ci && npx prisma generate && npm run typecheck
+
+      - name: payment-service — install and type-check
+        working-directory: services/payment-service
+        run: npm ci && npm run typecheck
+
+      - name: frontend — install, type-check and build
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Test catalog coverage (every catalog ID is automated in both API suites)
+        run: node scripts/check-coverage.mjs
+
+      - name: Build Docker images
+        run: docker compose build
+
+  # ---------------------------------------------------------------------------
+  smoke:
+    name: Smoke tests (both API suites)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/api-playwright/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Start the system and wait for health checks
+        run: docker compose up --build --detach --wait --wait-timeout 180
+
+      - name: Playwright API — smoke
+        working-directory: tests/api-playwright
+        run: npm ci && npx playwright test --grep @smoke
+
+      - name: Java Rest Assured — smoke
+        if: always()
+        working-directory: tests/api-java
+        run: chmod +x mvnw && ./mvnw -B -ntp clean verify -Dgroups=smoke
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color > docker-logs.txt
+
+      - name: Upload smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-reports
+          path: |
+            tests/api-playwright/playwright-report/
+            tests/api-java/target/allure-report/
+            docker-logs.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  api-playwright:
+    name: API regression — Playwright (Node)
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/api-playwright/package-lock.json
+
+      - name: Start the system and wait for health checks
+        run: docker compose up --build --detach --wait --wait-timeout 180
+
+      - name: Run regression tests
+        working-directory: tests/api-playwright
+        run: npm ci && npx playwright test --grep @regression
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color > docker-logs.txt
+
+      - name: Upload Playwright API report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-playwright-report
+          path: |
+            tests/api-playwright/playwright-report/
+            docker-logs.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  api-java:
+    name: API regression — Rest Assured (Java 21)
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Start the system and wait for health checks
+        run: docker compose up --build --detach --wait --wait-timeout 180
+
+      - name: Run regression tests (+ Allure report)
+        working-directory: tests/api-java
+        run: chmod +x mvnw && ./mvnw -B -ntp clean verify -Dgroups=regression
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color > docker-logs.txt
+
+      - name: Upload Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-java-allure-report
+          path: |
+            tests/api-java/target/allure-report/
+            tests/api-java/target/failsafe-reports/
+            docker-logs.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: E2E — Chromium + Firefox
+    needs: [api-playwright, api-java]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+
+      - name: Start the system and wait for health checks
+        run: docker compose up --build --detach --wait --wait-timeout 180
+
+      - name: Install dependencies and browsers
+        working-directory: tests/e2e
+        run: npm ci && npx playwright install --with-deps chromium firefox
+
+      - name: Run E2E tests
+        working-directory: tests/e2e
+        run: npx playwright test
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color > docker-logs.txt
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            tests/e2e/playwright-report/
+            docker-logs.txt
+          if-no-files-found: ignore
+
+      # Screenshots, videos and traces of failed tests (only exist when something failed).
+      - name: Upload E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: tests/e2e/test-results/
+          if-no-files-found: ignore

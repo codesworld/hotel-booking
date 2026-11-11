@@ -1,0 +1,86 @@
+openapi: 3.0.3
+info:
+  title: Payment Service (simulated)
+  version: 1.0.0
+  description: |
+    A fake payment provider used by booking-api. **No real cards, ever.**
+    Payments are kept in memory and are lost on restart.
+
+    The `cardToken` decides the outcome:
+
+    | cardToken | Result |
+    |---|---|
+    | `tok_success` | 201, status `APPROVED` |
+    | `tok_decline` | 402, status `DECLINED` (payment in `error.details.payment`) |
+    | `tok_slow` | waits 5 s (`PAYMENT_SLOW_MS`), then 201 `APPROVED` |
+    | `tok_error` | 500 |
+    | anything else | 400 `INVALID_CARD_TOKEN` |
+servers:
+  - url: /
+
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            field: { type: string }
+            details: { type: object, additionalProperties: true }
+    PaymentRequest:
+      type: object
+      additionalProperties: false
+      required: [bookingId, amount, cardToken]
+      properties:
+        bookingId: { type: string, example: 3f6c0b8e-2a7e-4e43-9d55-0c5b1f9d7a10 }
+        amount: { type: number, example: 384.5 }
+        cardToken: { type: string, enum: [tok_success, tok_decline, tok_slow, tok_error], example: tok_success }
+    Payment:
+      type: object
+      required: [id, bookingId, amount, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        bookingId: { type: string }
+        amount: { type: number }
+        status: { type: string, enum: [APPROVED, DECLINED] }
+        createdAt: { type: string, format: date-time }
+
+paths:
+  /payments:
+    post:
+      summary: Charge a (fake) card
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PaymentRequest' } } }
+      responses:
+        '201':
+          description: Approved
+          headers: { Location: { schema: { type: string } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Payment' } } }
+        '400':
+          description: Validation error or unknown card token
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '402':
+          description: Declined. The stored payment is in error.details.payment.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '500':
+          description: Simulated provider failure (tok_error)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /payments/{id}:
+    get:
+      summary: Get a payment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Payment' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }

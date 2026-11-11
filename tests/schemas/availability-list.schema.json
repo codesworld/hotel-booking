@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AvailabilityList",
+  "description": "GET /rooms/availability (200), paginated. Only active rooms; each item has nights and totalPrice for the stay.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "page", "limit", "total"],
+  "properties": {
+    "items": { "type": "array", "items": { "$ref": "#/definitions/AvailableRoom" } },
+    "page": { "type": "integer", "minimum": 1 },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "total": { "type": "integer", "minimum": 0 }
+  },
+  "definitions": {
+    "AvailableRoom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "number", "type", "capacity", "pricePerNight", "isActive", "nights", "totalPrice"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "number": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,10}$" },
+        "type": { "type": "string", "enum": ["SINGLE", "DOUBLE", "SUITE"] },
+        "capacity": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "pricePerNight": { "type": "number", "exclusiveMinimum": 0 },
+        "isActive": { "type": "boolean", "enum": [true] },
+        "nights": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "totalPrice": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,518 @@
+openapi: 3.0.3
+info:
+  title: Hotel Booking API
+  version: 1.0.0
+  description: |
+    booking-api of the Hotel Booking QA portfolio project.
+
+    **How to try it:**
+    1. (APP_ENV=test only) `POST /test/seed` to load the known dataset.
+    2. `POST /auth/login` with a seeded user (credentials are in `.env.test`).
+    3. Copy `accessToken`, click **Authorize** and paste it.
+    4. `GET /rooms/availability`, then `POST /bookings` with `cardToken: tok_success`.
+
+    **Errors** always use the format `{ "error": { "code", "message", "field?", "details?" } }`.
+
+    **Dates** are `YYYY-MM-DD`, in UTC. Check-in time is 14:00 UTC (`CHECKIN_HOUR_UTC`).
+
+    **X-Test-Now header** (APP_ENV=test only): any request may send
+    `X-Test-Now: 2026-12-01T10:00:00Z` to make the API believe that is the current time.
+servers:
+  - url: /
+tags:
+  - name: Auth
+  - name: Rooms
+  - name: Bookings
+  - name: Health
+  - name: Test hooks
+    description: Only available when APP_ENV=test. Return 404 otherwise.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string, example: checkOut must be after checkIn }
+            field: { type: string, example: checkOut }
+            details:
+              type: object
+              additionalProperties: true
+              example: { bookingId: 3f6c0b8e-2a7e-4e43-9d55-0c5b1f9d7a10 }
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, fullName]
+      properties:
+        email: { type: string, format: email, example: new.guest@example.test }
+        password: { type: string, minLength: 8, maxLength: 72, example: Secret123! }
+        fullName: { type: string, minLength: 1, maxLength: 100, example: New Guest }
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, example: guest1@hotel.test }
+        password: { type: string, example: Guest123! }
+
+    LoginResponse:
+      type: object
+      required: [accessToken, tokenType, expiresIn, user]
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, description: Seconds until the token expires, example: 900 }
+        user: { $ref: '#/components/schemas/User' }
+
+    User:
+      type: object
+      required: [id, email, fullName, role, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        fullName: { type: string }
+        role: { type: string, enum: [GUEST, ADMIN] }
+        createdAt: { type: string, format: date-time }
+
+    RoomType:
+      type: string
+      enum: [SINGLE, DOUBLE, SUITE]
+
+    Room:
+      type: object
+      required: [id, number, type, capacity, pricePerNight, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string, example: '101' }
+        type: { $ref: '#/components/schemas/RoomType' }
+        capacity: { type: integer, minimum: 1, maximum: 6 }
+        pricePerNight: { type: number, example: 120.5 }
+        isActive: { type: boolean }
+
+    AvailableRoom:
+      allOf:
+        - $ref: '#/components/schemas/Room'
+        - type: object
+          required: [nights, totalPrice]
+          properties:
+            nights: { type: integer, example: 3 }
+            totalPrice: { type: number, description: Price for the whole stay (weekend surcharge included), example: 384 }
+
+    CreateRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [number, type, capacity, pricePerNight]
+      properties:
+        number: { type: string, pattern: '^[A-Za-z0-9-]{1,10}$', example: '401' }
+        type: { $ref: '#/components/schemas/RoomType' }
+        capacity: { type: integer, minimum: 1, maximum: 6, example: 2 }
+        pricePerNight: { type: number, exclusiveMinimum: true, minimum: 0, example: 110 }
+        isActive: { type: boolean, default: true }
+
+    ReplaceRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [number, type, capacity, pricePerNight]
+      description: isActive is not allowed here; use PATCH.
+      properties:
+        number: { type: string, pattern: '^[A-Za-z0-9-]{1,10}$', example: '401' }
+        type: { $ref: '#/components/schemas/RoomType' }
+        capacity: { type: integer, minimum: 1, maximum: 6, example: 2 }
+        pricePerNight: { type: number, exclusiveMinimum: true, minimum: 0, example: 115 }
+
+    PatchRoomRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        number: { type: string, pattern: '^[A-Za-z0-9-]{1,10}$' }
+        type: { $ref: '#/components/schemas/RoomType' }
+        capacity: { type: integer, minimum: 1, maximum: 6 }
+        pricePerNight: { type: number, exclusiveMinimum: true, minimum: 0 }
+        isActive: { type: boolean, example: false }
+
+    BookingStatus:
+      type: string
+      enum: [PENDING_PAYMENT, CONFIRMED, PAYMENT_FAILED, CANCELLED]
+
+    CreateBookingRequest:
+      type: object
+      additionalProperties: false
+      required: [roomId, checkIn, checkOut, guests, cardToken]
+      properties:
+        roomId: { type: string, format: uuid }
+        checkIn: { type: string, format: date, example: '2026-12-01' }
+        checkOut: { type: string, format: date, example: '2026-12-04' }
+        guests: { type: integer, minimum: 1, example: 2 }
+        cardToken:
+          type: string
+          description: Test card token. tok_success, tok_decline, tok_slow, tok_error.
+          example: tok_success
+
+    Booking:
+      type: object
+      required: [id, roomId, userId, checkIn, checkOut, guests, totalPrice, status, paymentId, createdAt, cancelledAt]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        guests: { type: integer }
+        totalPrice: { type: number }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        paymentId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+
+    PageMeta:
+      type: object
+      required: [page, limit, total]
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+
+  responses:
+    BadRequest:
+      description: Validation error, malformed JSON or unknown field
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing, malformed, invalid or expired token
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Valid token, but not allowed
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Conflict with current state
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    UnsupportedMediaType:
+      description: Body sent with a Content-Type other than application/json
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  headers:
+    Location:
+      description: URL of the created resource
+      schema: { type: string }
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new guest account
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and get a JWT access token (15 min)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/LoginResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: The logged-in user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /rooms:
+    get:
+      tags: [Rooms]
+      summary: List rooms (inactive rooms hidden)
+      description: Admins can add `includeInactive=true` (with a token) to also see inactive rooms.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/RoomType' } }
+        - { name: includeInactive, in: query, schema: { type: string, enum: ['true', 'false'] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Room' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Rooms]
+      summary: Create a room (ADMIN)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateRoomRequest' } } }
+      responses:
+        '201':
+          description: Created
+          headers: { Location: { $ref: '#/components/headers/Location' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /rooms/availability:
+    get:
+      tags: [Rooms]
+      summary: Active rooms free for the whole stay, with total price
+      parameters:
+        - { name: checkIn, in: query, required: true, schema: { type: string, format: date } }
+        - { name: checkOut, in: query, required: true, schema: { type: string, format: date } }
+        - { name: guests, in: query, schema: { type: integer, minimum: 1, maximum: 6 } }
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/RoomType' } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/AvailableRoom' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /rooms/{id}/quote:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Rooms]
+      summary: Price of a stay, night by night
+      description: |
+        Same date rules as booking (400). Nightly prices are not rounded; only totalPrice is
+        (half-up, 2 decimals), so rounded nightly prices may not add up to totalPrice exactly.
+      parameters:
+        - { name: checkIn, in: query, required: true, schema: { type: string, format: date } }
+        - { name: checkOut, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roomId: { type: string, format: uuid }
+                  checkIn: { type: string, format: date }
+                  checkOut: { type: string, format: date }
+                  pricePerNight: { type: number }
+                  nights:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        isWeekend: { type: boolean }
+                        price: { type: number }
+                  totalPrice: { type: number }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /rooms/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Rooms]
+      summary: Get one room
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Rooms]
+      summary: Replace room details (ADMIN). isActive is not allowed; use PATCH.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRoomRequest' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    patch:
+      tags: [Rooms]
+      summary: Partially update a room, e.g. deactivate (ADMIN)
+      description: Deactivating a room with upcoming confirmed bookings returns 409.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchRoomRequest' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      summary: Create a booking and pay for it
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateBookingRequest' } } }
+      responses:
+        '201':
+          description: Created and paid (CONFIRMED)
+          headers: { Location: { $ref: '#/components/headers/Location' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: Payment declined. Booking saved as PAYMENT_FAILED; its id is in error.details.bookingId.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Room already booked for these dates (ROOM_UNAVAILABLE) or inactive (ROOM_INACTIVE)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '502':
+          description: Payment service error/unreachable. Booking saved as PAYMENT_FAILED.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '504':
+          description: Payment service timeout (3s). Booking saved as PAYMENT_FAILED.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    get:
+      tags: [Bookings]
+      summary: 'List bookings (guest: own, admin: all)'
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Booking' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /bookings/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Bookings]
+      summary: Get one booking (owner or ADMIN)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bookings/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Bookings]
+      summary: Cancel a booking (owner or ADMIN)
+      description: Guests can cancel only more than 48h before check-in (14:00 UTC). Admins can always cancel.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/Booking' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already cancelled (ALREADY_CANCELLED) or payment failed (BOOKING_NOT_CANCELLABLE)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: Less than 48h before check-in (CANCELLATION_WINDOW_PASSED)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Service and database health
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: booking-api }
+                  database: { type: string, example: up }
+        '503': { description: Database not reachable }
+
+  /test/reset:
+    post:
+      tags: [Test hooks]
+      summary: Wipe the database (APP_ENV=test only)
+      responses:
+        '200': { description: Database wiped }
+
+  /test/seed:
+    post:
+      tags: [Test hooks]
+      summary: Wipe and load the known dataset (APP_ENV=test only)
+      description: 1 admin, 2 guests, 6 rooms (2 per type, room 302 inactive), 6 bookings in different states. Returns all created records.
+      responses:
+        '200': { description: Seeded }

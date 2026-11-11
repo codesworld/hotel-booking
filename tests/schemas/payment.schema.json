@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Payment",
+  "description": "payment-service: POST /payments (201) and GET /payments/{id} (200).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "bookingId", "amount", "status", "createdAt"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "bookingId": { "type": "string", "minLength": 1 },
+    "amount": { "type": "number", "exclusiveMinimum": 0 },
+    "status": { "type": "string", "enum": ["APPROVED", "DECLINED"] },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,77 @@
+// Database schema for booking-api.
+// Extra database-level rules that Prisma cannot express (CHECK constraints and the
+// "no overlapping bookings" exclusion constraint) live in the SQL migration:
+// prisma/migrations/20261110000000_init/migration.sql
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  GUEST
+  ADMIN
+}
+
+enum RoomType {
+  SINGLE
+  DOUBLE
+  SUITE
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PAYMENT_FAILED
+  CANCELLED
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  passwordHash String
+  fullName     String
+  role         Role      @default(GUEST)
+  createdAt    DateTime  @default(now())
+  bookings     Booking[]
+
+  @@map("users")
+}
+
+model Room {
+  id            String    @id @default(uuid()) @db.Uuid
+  number        String    @unique
+  type          RoomType
+  capacity      Int
+  pricePerNight Decimal   @db.Decimal(10, 2)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  bookings      Booking[]
+
+  @@map("rooms")
+}
+
+model Booking {
+  id          String        @id @default(uuid()) @db.Uuid
+  roomId      String        @db.Uuid
+  userId      String        @db.Uuid
+  checkIn     DateTime      @db.Date
+  checkOut    DateTime      @db.Date
+  guests      Int
+  totalPrice  Decimal       @db.Decimal(10, 2)
+  status      BookingStatus @default(PENDING_PAYMENT)
+  paymentId   String?
+  createdAt   DateTime      @default(now())
+  cancelledAt DateTime?
+
+  room Room @relation(fields: [roomId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([roomId])
+  @@index([userId])
+  @@map("bookings")
+}

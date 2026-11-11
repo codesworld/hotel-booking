@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Health",
+  "description": "GET /health of booking-api (with database) and payment-service (without).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "service"],
+  "properties": {
+    "status": { "type": "string", "enum": ["ok"] },
+    "service": { "type": "string", "enum": ["booking-api", "payment-service"] },
+    "database": { "type": "string", "enum": ["up"] }
+  }
+}
