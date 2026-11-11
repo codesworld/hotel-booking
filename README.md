@@ -1,13 +1,15 @@
 # Hotel Booking System — QA Portfolio Project
 
+[![CI](https://github.com/codesworld/hotel-booking/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/codesworld/hotel-booking/actions/workflows/ci.yml)
+
 A small hotel booking system that exists **to be tested**. The application is
 deliberately simple. The focus is on testability, and later on API, E2E,
 contract and performance test suites built on top of it.
 
-> Status: **Phase 5 done**: booking-api + PostgreSQL + payment-service + React UI in Docker,
+> Status: **Phase 6 done**: booking-api + PostgreSQL + payment-service + React UI in Docker,
 > a 184-case test catalog, two independent API suites (Playwright TypeScript and Java Rest
-> Assured) covering every automated case, and Playwright E2E tests for the critical UI flows
-> on Chromium and Firefox.
+> Assured) covering every automated case, Playwright E2E tests on Chromium and Firefox, and a
+> GitHub Actions pipeline that runs all of it on every push.
 
 ## Architecture
 
@@ -551,6 +553,34 @@ The differences are in everything around the test:
 Playwright is the lighter choice. Rest Assured fits a Java/JVM organisation that wants
 compile-time typed models and Allure-style reporting. This project keeps both to show the
 same test design (catalog → IDs → shared schemas) working in both ecosystems.
+
+## Continuous integration (GitHub Actions)
+
+Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — runs on every push and pull request.
+**Runs and reports: [Actions tab](https://github.com/codesworld/hotel-booking/actions/workflows/ci.yml).**
+
+```
+ build ──> smoke ──┬──> API regression: Playwright (Node 20) ──────┐
+                   └──> API regression: Rest Assured (Java 21) ────┴──> E2E (Chromium + Firefox)
+```
+
+| Job | What it does | Artifact (download from the run page) |
+|---|---|---|
+| **Build and static checks** | type-check + build booking-api, payment-service, frontend · **catalog coverage check** (fails if any catalog ID is missing from either API suite) · build all Docker images | – |
+| **Smoke tests** | start the stack (`docker compose up --wait` waits for every health check) · `@smoke` of both API suites | `smoke-reports` |
+| **API regression — Playwright** | own stack · `@regression` tests | `api-playwright-report` (HTML) |
+| **API regression — Rest Assured** | own stack · `-Dgroups=regression` · Allure report | `api-java-allure-report` |
+| **E2E** | own stack · Playwright browsers · all E2E flows on Chromium and Firefox | `e2e-report` (+ `e2e-failure-artifacts`: screenshots, videos, traces, only on failure) |
+
+- **Gates**: regression only runs if smoke passed, and E2E only if both API suites passed.
+  A newer push to the same branch cancels the older run.
+- Each test job runs against **its own fresh stack**, so the suites never re-seed each other's data.
+- Reports are uploaded **even when tests fail** (`if: always()`). Container logs
+  (`docker-logs.txt`) are added to the artifact when a job fails.
+- CI uses the committed `.env.test` (dummy values only). No secrets are needed.
+
+To open a downloaded report: unzip it and open `index.html`. Allure reports may need a local
+web server (`npx http-server <folder>` or `allure open <folder>`).
 
 ## Known limitations
 
